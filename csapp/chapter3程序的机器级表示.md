@@ -4,10 +4,12 @@
 
 ***
 
-## Sizes of C data types in x86-64. With a 64-bit machine, pointers are 8 bytes long
+## x86-64 数据类型大小
+Sizes of C data types in x86-64. With a 64-bit machine, pointers are 8 bytes long
+
 | C declaration | Intel data type | Assembly-code suffifix | Size (bytes) |
 | :----: | :----: | :----: | :----: |
-|char    | | Byte           | b | 1 |
+|char    |   Byte           | b | 1 |
 |short   | Word             | w | 2 |
 |int     | Double word      | l | 4 |
 |long    | Quad word        | q | 8 |
@@ -77,3 +79,25 @@
 | 260(%rcx,%rdx) | 0x13   |变址寻址 rcx + rdx + 260 = 0x108|
 | 0xFC(,%rcx,4)  | 0xFF   | 比例变地寻址, rcx * 4 + 0fc|
 | (%rax,%rdx,4)  | 0x11   | 比例变地寻址, rax + rdx * 4 |
+
+
+
+***
+## push & pop 指令
+- push %rbp 等价于: subq $8, $rsp; movq %rbp, (%rsp)
+- popq %rax 等价于: movq $rax, %rax; addq $8, %rsp;
+
+***
+## 加载有效地址
+加载有效地址(load effective address)指令leaq实际上是movq指令的变形。这个指令看上去好像是从内存上读指定地址的数据到目标操作数中, 但实际上它并没有从内存读, 而是把该有效地址写入到目标操作数中。
+用法:
+- 可以为内存引用产生指针
+- 还可以简洁地描述普通的运算操作。如: 假设%rdx的值为x, 那么leaq 7(%rdx, %rdx, 4), %rax. 则%rax等于 x + x * 4 + 7 = 5x+7
+
+### leaq 与 movq 的区别
+同样, 假设%rdx的值为x, 那么movq 7(%rdx, %rdx, 4), %rax. 则%rax等于从内存地址为 5x + 7 中的内存单元拿数据, 再赋值给%rax
+
+
+***
+## 条件码 (p171)
+ `TO DO`

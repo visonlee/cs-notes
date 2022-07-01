@@ -99,5 +99,23 @@ Sizes of C data types in x86-64. With a 64-bit machine, pointers are 8 bytes lon
 
 
 ***
-## 条件码 (p171)
- `TO DO`
+## 条件码
+- CF(Carry flag):进位标志。最近的操作使最高位产生了进位，可检查无符号数操作的溢出。
+- ZF(Zero flag): 零标志,最近的操作结果得出零的结果
+- SF(Signed flag): 符号标志,最近的操作结果为负数
+- OF(Overflow flag0):一处标志,最近的操作导致一个补码正溢出或负溢出
+
+比如, 一条add指令执行操作 t = a + b的功能(a、b、t睡是整型的)。然后结构根据下面的结果设置条件码:
+
+| 标志 | 结果 | 注释 |
+| :----: | :----: | :----: |
+| CF | (unsigend) t < (unsigned)a  | 无符号溢出  |
+| ZF | (t == 0 )                   | 零         | 
+| SF | (t < 0)                     | 负数       | 
+| OF | (a<0==b<0) && (t<0 !=a<0>)  | 有符号溢出  |
+
+leaq 不会改变条件码, 其他指令INC,DECNEG,NOT, ADD,SUB,IMUL,XOR.OR,ANDSAL,SHL,SAR,SHR都会设置条件码。例如XOR, 进位和溢出标志都会被设置成0。对于移位操作, 进位标志经设置为最后一个被溢出的位,而溢出标志设置为0.INC和DEC会设置溢出和零标志, 但是不会改变进位标志位。
+
+有些指令只设置条件码而不改变任何寄存器, 如CMP、TEST指令。
+- CMP (CMP S1, S2,基于S2-S1)根据两个操作数只差来设置条件码,而不更新寄存器，如果两个操作数相等, Zero flag的结果为1。除此之外, 它是跟SUB指令是一样的。
+- TEST TEST指令除了他们只设置条件码而不改变目其寄存器的值，其它与and指令一样。典型用法如(testq %rax, %rax来检查%rax是负数零,还是正数),或者其中一个操作数是掩码, 用来指示哪些位应该被测试

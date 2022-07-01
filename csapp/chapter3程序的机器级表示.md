@@ -120,6 +120,8 @@ leaq 不会改变条件码, 其他指令INC,DECNEG,NOT, ADD,SUB,IMUL,XOR.OR,ANDS
 - CMP (CMP S1, S2,基于S2-S1)根据两个操作数只差来设置条件码,而不更新寄存器，如果两个操作数相等, Zero flag的结果为1。除此之外, 它是跟SUB指令是一样的。
 - TEST TEST指令除了他们只设置条件码而不改变目其寄存器的值，其它与and指令一样。典型用法如(testq %rax, %rax来检查%rax是负数零,还是正数),或者其中一个操作数是掩码, 用来指示哪些位应该被测试
 
+<br>
+
 ## 条件码访问
 条件码访问有三种:
 - 根据条件码组合, 将一个字节设置为1或者1 (SET指令)
@@ -231,3 +233,143 @@ loop:
 
 - 绝对寻址
  todo
+
+<br>
+<br>
+
+ ### 有条件的数据传送
+来看两个例子:
+- 条件控制实现条件分支
+来看一段代码
+```C
+long lt_cnt = 0;
+long ge_cnt = 0;
+
+long absdiff_se(long x, long y)
+{
+    long result;
+    if (x < y) {
+      lt_cnt++;
+      result = y - x;
+    } else {
+     ge_cnt++;
+     result = x - y;
+    }
+    return result;
+}
+```
+其对应的汇编代码控制流程类似下面这段C代码
+```C
+long gotodiff_se(long x, long y)
+{
+    long result;
+    if (x >= y)
+        goto x_ge_y;
+    lt_cnt++;
+    result = y - x;
+    return result;
+x_ge_y:
+    ge_cnt++;
+    result = x - y;
+    return result;
+}
+```
+产生的汇编代码 `-O2` 编译选项
+```asm
+absdiff_se:
+.LFB0:
+        endbr64
+        movq    %rsi, %rax
+        cmpq    %rsi, %rdi
+        jge     .L2
+        addq    $1, lt_cnt(%rip)
+        subq    %rdi, %rax
+        ret
+.L2:
+        subq    %rsi, %rdi
+        addq    $1, ge_cnt(%rip)
+        movq    %rdi, %rax
+        ret
+```
+在这里因为`lt_cnt`和`ge_cnt`这两个全局变量存在而产生副作用, 编译器没有办法做进一步的优化。这种条件控制的方法,当条件满足是,程序沿着一条路径执行, 当条件不满足时, 就走另外一条路径。这种机制简单而通用, 但是在现代处理器上, 它可能会非常低效。
+
+<br>
+
+- 条件传送实现条件分支
+再看一个例子:
+```C
+long absdiff(long x, long y)
+{
+    long result;
+    if (x < y)
+      result = y - x;
+    else
+      result = x - y;
+    return result;
+}
+```
+其实现逻辑对应的C代码:
+```C
+long cmovdiff(long x, long y)
+{
+    long rval = y - x;
+    long eval = x - y;
+    long ntest = x >= y;
+    if (ntest) rval = eval; //这一行需要单指令实现, 即cmov指令
+    return rval;
+}
+```
+产生的汇编代码 `-O2` 编译选项
+```asm
+# long absdiff(long x, long y)
+# x in %rdi, y in %rsi
+absdiff:
+        endbr64
+        movq %rsi, %rax
+        subq %rdi, %rax  #rval = y-x
+        movq %rdi, %rdx
+        subq %rsi, %rdx  #eval = x-y
+        cmpq %rsi, %rdi  #Compare x:y
+        cmovge %rdx, %rax #If >=, rval = eval
+        ret Return tval
+```
+可以看到,因为这个例子中不像条件控制实现条件分支的那个例子, 那个例子中因为`lt_cnt`和`ge_cnt`这两个全局变量而无法优化。而当前这里例子, 因为没有全局变量, 所以把`if`和`else`都算一遍都没有问题, 然后使用`cmovge`实现条件传送.
+
+以下内容摘自CSAPP3e中文译本 Page 146
+> 为了理解为什么基于条件数据传送的代码会比基于条件控制转移的代码性能要好，我们必须了解一些关于现代处理器如何运行的知识。正如我们在第4章和第5章中看到的，处理器通过流水线（pipelining）来获得高性能，在流水线中，一条指令的处理要经过一些列的阶段，每个阶段执行所需操作的一小部分（例如，从内存取指令，确定指令类型，从内存读数据，执行算术运算，向内存写数据，以及更新程序计数器）。这种方法通过重叠连续指令的步骤来获得高性能，例如，在取一条命令的同时，执行它前面一条指令的算术运算。要做到这一点，要求能够事先确定要执行的指令序列，这样才能保持流水线中充满了待执行的指令。当机器要到条件跳转（也称为“分支”）时，只有当分支条件求值完成后，才能决定分支往哪边走，处理器采用非常精密的分支预测逻辑来猜测每条跳转指令是否会执行。只要它的猜测还比较可靠（现代微处理器设计试图达到90%以上的成功率），指令流水线就会充满着指令。另一方面，错误预测一个跳转，要求处理器丢掉它为该跳转指令后所有指令已做的工作，然后再开始从正确位置其实的指令取填充流水线，正如我们会看到的，这样一个错误预测会招致很严重的处罚，浪费大约15~30个时钟周期，导致程序性能严重下降。
+
+<br>
+
+| 指令 | 同义名 | 传送条件 |  描述 |
+| :----: | :----: | :----: | :----: |
+| cmove S, R | cmovz | ZF | Equal / zero |
+| cmovne S, R | cmovnz | ~ZF | Not equal / not zero |
+| cmovs S, R | |SF | Negative |
+| cmovns S, R | | ~SF | Nonnegative |
+| cmovg S, R | cmovnle | ~(SF ^ OF) & ~ZF|  Greater (signed >) |
+| cmovge S, R | cmovnl | ~(SF ^ OF) | Greater or equal (signed >=) |
+| cmovl S, R | cmovnge | SF ^ OF | Less (signed <) |
+| cmovle S, R | cmovng | (SF ^ OF) or ZF | Less or equal (signed <=) |
+| cmova S, R | cmovnbe | ~CF & ~ZF |  Above (unsigned >) |
+| cmovae S, R | cmovnb | ~CF | Above or equal (Unsigned >=) |
+| cmovb S, R | cmovnae | CF | Below (unsigned <) |
+| cmovbe S, R | cmovna | CF | ZF Below or equal (unsigned <=) |
+
+
+当然条件传送也不是完美的， 
+
+- 比如下面代码:
+```C
+long cread(long *xp) {
+    return (xp ? *xp : 0);
+}
+```
+因为存在空指针引用的问题, 就只能使用条件控制来编译这段代码.
+
+- 再比如, `if` 和 `else` 都需要大量的计算, 如果条件不满足, 那么这些计算也就白白浪费了.
+
+***
+<br>
+
+
+

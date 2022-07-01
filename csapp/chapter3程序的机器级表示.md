@@ -119,3 +119,115 @@ leaq 不会改变条件码, 其他指令INC,DECNEG,NOT, ADD,SUB,IMUL,XOR.OR,ANDS
 有些指令只设置条件码而不改变任何寄存器, 如CMP、TEST指令。
 - CMP (CMP S1, S2,基于S2-S1)根据两个操作数只差来设置条件码,而不更新寄存器，如果两个操作数相等, Zero flag的结果为1。除此之外, 它是跟SUB指令是一样的。
 - TEST TEST指令除了他们只设置条件码而不改变目其寄存器的值，其它与and指令一样。典型用法如(testq %rax, %rax来检查%rax是负数零,还是正数),或者其中一个操作数是掩码, 用来指示哪些位应该被测试
+
+## 条件码访问
+条件码访问有三种:
+- 根据条件码组合, 将一个字节设置为1或者1 (SET指令)
+- 条件跳转到程序的其他地方
+- 有条件的传送数据
+
+### set指令
+一条set指令的目的操作数是低位单字节寄存器或一个字节的内存, 指令会将这个字节设置成0或1。为了得到一个32/64位的结果, 必须将高位清零。主义下面的setl的l是less, setb的b是below。
+举个例子:
+```asm
+movq $0, %rax
+movq $3, %rdi
+movq $3, %rsi    # %rsi == %rdi
+cmpq %rdi, %rsi  # 因为相等, 所以ZF为1,假如不相等ZF为0
+setq %al         #把ZF=1赋值给%al,若ZF=0,也会把ZF=0赋值给%al
+```
+|指令 | 同义名 | 效果 | 条件 |
+| :----: | :----: | :----: | :----: |
+|sete D | setz | D ← ZF | 相等/零 |
+|setne D | setnz | D ← ~ ZF | 不等/非零 |
+|sets D | | D ← SF | 负数 | 
+|setns D | | D ← ~ SF | 非负数 |
+|setg D | setnle | D ← ~ (SF ^ OF) & ~ZF | 大于(有符号>)  |
+|setge D | setnl | D ← ~ (SF ^ OF) | 大于或者等于 (有符号 >=) |
+|setl D | setnge | D ← SF ^ OF | 小于 (有符号 <)
+|setle D | setng | D ← (SF ^ OF) or ZF | 小于或等于 (有符号 <=) |
+|seta D | setnbe | D ← ~ CF & ~ZF | 超过 (无符号 >) |
+|setae D | setnb | D ← ~ CF | 超过或等于 (无符号 >=)  |
+|setb D | setnae | D ← CF | 低于 (无符号 <)  |
+|setbe D | setna | D ← CF or ZF | 低于或等于 (无符号 <=) |
+
+### 跳转指令
+
+| 指令 | 同义名 | 跳转条件 | 描述 |
+| :----: | :----: | :----: | :----: |
+| jmp Label | | 1 | unconditionally Direct jump |
+| jmp *Operand | | 1 | unconditionally Indirect jump |
+| je Label | jz | ZF | Equal / zero
+| jne Label | jnz | ~ZF |  Not equal / not zero |
+| js Label | | SF | Negative |
+| jns Label | | ~SF | Nonnegative |
+| jg Label | jnle | ~(SF ^ OF) & ~ZF | Greater (signed >) |
+| jge Label | jnl | ~(SF ^ OF)  | Greater or equal (signed >=) |
+| jl Label | jnge | SF ^ OF  | Less (signed <) |
+| jle Label | jng | (SF ^ OF) or ZF  | Less or equal (signed <=) |
+| ja Label | jnbe | ~CF & ~ZF  | Above (unsigned >) |
+| jae Label | jnb | ~CF  | Above or equal (unsigned >=) |
+| jb Label | jnae | CF | Below (unsigned <) |
+| jbe Label | jna | CF or ZF | Below or equal (unsigned <=) |
+
+
+- 相对寻址
+假设有如下代码`branch.c`:
+```c
+long loop(long x)
+{
+    while (x > 0) {
+        x = x >> 1;
+    }
+    return x;
+}
+
+int main()
+{
+    return loop(-2);
+}
+```
+执行`gcc -Og -S branch.c` 得到`branch.s`, `loop`函数如下:
+```asm
+loop:
+.LFB0:
+        endbr64
+        movq    %rdi, %rax
+.L2:
+        testq   %rax, %rax
+        jle     .L4
+        sarq    %rax
+        jmp     .L2
+.L4:
+        ret
+```
+执行`gcc -C -Og branch.c`, 然后`objdump -d branch.o`得到
+```asm
+ 0000000000000000 <loop>:
+1   0:   f3 0f 1e fa             endbr64
+2   4:   48 89 f8                mov    %rdi,%rax
+3   7:   48 85 c0                test   %rax,%rax
+4   a:   7e 05                   jle    11 <loop+0x11>
+5   c:   48 d1 f8                sar    %rax
+6   f:   eb f6                   jmp    7 <loop+0x7>
+7  11:   c3                      retq
+```
+第4行中跳转指令的目标指明为`0x11`,第6行中跳转指令的目标指明为`0x07`.
+不过观察指令的编码,会看到第一条指令的目标编码(在第二个字节中)为`0x05`, 把它加上`0x0c`(因为目标编码`0x05`距离函数`loop`开头为 `0x0c`)，即`0x11 = 0x05 + 0x0c`,即第7行处的指令
+类似地, 第二个跳转指令的目标用单字节补码表示为`0xF6`(十进制-10)。将这个数数加上`0x11`, 即 `0x07 = 0x11 - 0x0a`,即跳转第3行的指令
+下面是链接后反汇编的代码
+```asm
+ 0000000000001129 <loop>:
+1    1129:       f3 0f 1e fa             endbr64
+2    112d:       48 89 f8                mov    %rdi,%rax
+3    1130:       48 85 c0                test   %rax,%rax
+4    1133:       7e 05                   jle    113a <loop+0x11>
+5    1135:       48 d1 f8                sar    %rax
+6    1138:       eb f6                   jmp    1130 <loop+0x7>
+7    113a:       c3                      retq
+```
+这些指令被重定位到不同的地址, 但是第4和第6行的跳转目标编码并没有变。通过使用与PC相对的跳转目标编码, 指令只需要很简洁(只需要2个自己), 而且目标代码可以不做改变就能移到内存中不同的位置。
+
+
+- 绝对寻址
+ todo

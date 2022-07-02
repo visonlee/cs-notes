@@ -517,6 +517,8 @@ switch_eg:
 
 ### CALL 和RET指令
 还是用一段代码和GDB调试说明吧
+
+
 ```C
 // stackframe.c
 long foo(long a) {
@@ -530,7 +532,12 @@ int main() {
     return 0;
 }
 ```
+<br>
+
+- 64位的情况
+
 使用`gcc -O0 stackframe.c  && objdump -d ./a.out` 后部分的反汇编如下:
+
 ```asm
 0000000000001129 <foo>:
     1129:       f3 0f 1e fa             endbr64
@@ -557,7 +564,7 @@ int main() {
     1166:       48 89 45 f8             mov    %rax,-0x8(%rbp)      #rax是foo函数的返回值, 赋值给-0x8(%rbp)，即变量ret
     116a:       b8 00 00 00 00          mov    $0x0,%eax            #main函数的返回参数0赋值给eax
     116f:       c9                      leaveq                      #恢复现场,leaveq等价于这两条:mov %rbp, %rsp; pop %rbp
-    1170:       c3                      retq                        #返回(return)指令,
+    1170:       c3                      retq                        #返回(return)指令
 ```
 我把gdb初始化的命令放在`gdbinit`文件下, 如下:
 ```
@@ -595,8 +602,83 @@ $4 = (void *) 0x7fffffffe118
 | 0x7fffffffe108 | 0x154              | main函数变量ret|
 | 0x7fffffffe100 | 0xaa               | main函数的变量x |
 | 0x7fffffffe0f8 | 0x555555555166     | call <foo>的下一条指令的地址|
-| 0x7fffffffe0f0 | 0x7fffffffe110     | 这里保存的是rbp的备份,foo函数栈帧的开始 |
+| 0x7fffffffe0f0 | 0x7fffffffe110     | 备份main函数的栈帧的基地址,foo函数栈帧的开始 |
 | 0x7fffffffe0e8 | 0x154              | foo函数返回值,即foo函数c变量的值| 
 | 0x7fffffffe0e0 | 未使用              | 未使用 |
 | 0x7fffffffe0d8 | 0xaa               | foo函数的参数a |
 | 0x7fffffffe0d0 | 未使用              | 未使用 |
+
+<br>
+
+- 32位的情况
+
+使用`gcc -m32 -O0 stackframe.c  && objdump -d ./a.out` 后部分的反汇编如下:
+```asm
+000011ad <foo>:
+    11ad:       f3 0f 1e fb             endbr32
+    11b1:       55                      push   %ebp                           #保存ebp的副本,即保存main函数栈帧的基地址
+    11b2:       89 e5                   mov    %esp,%ebp                      #把esp的值复制给ebp,用来保存当前栈帧的基地址
+    11b4:       83 ec 10                sub    $0x10,%esp                     #分配0x10(十进制16)字节栈空间,栈往下生长
+    11b7:       e8 42 00 00 00          call   11fe <__x86.get_pc_thunk.ax>   #忽略,不在讨论范围
+    11bc:       05 20 2e 00 00          add    $0x2e20,%eax                   #eax = eax + $0x2e20
+    11c1:       8b 45 08                mov    0x8(%ebp),%eax                 #相当于foo函数参数a赋值给eax
+    11c4:       01 c0                   add    %eax,%eax                      #eax = eax * 2
+    11c6:       89 45 fc                mov    %eax,-0x4(%ebp)                #-0x4(%ebp)是变量c
+    11c9:       8b 45 fc                mov    -0x4(%ebp),%eax                #返回值传给eax
+    11cc:       c9                      leave
+    11cd:       c3                      ret
+
+000011ce <main>:
+    11ce:       f3 0f 1e fb             endbr32
+    11d2:       55                      push   %ebp                           #保存ebp的副本
+    11d3:       89 e5                   mov    %esp,%ebp                      #把esp的值复制给ebp,用来保存当前栈帧的基地址
+    11d5:       83 ec 10                sub    $0x10,%esp                     #分配0x10(十进制16)字节栈空间,栈往下生长
+    11d8:       e8 21 00 00 00          call   11fe <__x86.get_pc_thunk.ax>   #忽略,不在讨论范围
+    11dd:       05 ff 2d 00 00          add    $0x2dff,%eax                   #eax = eax + $0x2dff
+    11e2:       c7 45 f8 aa 00 00 00    movl   $0xaa,-0x8(%ebp)               # 变量x = 0xaa
+    11e9:       ff 75 f8                pushl  -0x8(%ebp)                     # 把参数a压栈,传给foo函数
+    11ec:       e8 bc ff ff ff          call   11ad <foo>                     #call指令的下一条指令压栈,eip指向foo函数
+    11f1:       83 c4 04                add    $0x4,%esp                      #函数传参用栈,这里相当于对传参栈的回收
+    11f4:       89 45 fc                mov    %eax,-0x4(%ebp)                #eax接收foo函数的返回值, 并传给变量ret
+    11f7:       b8 00 00 00 00          mov    $0x0,%eax                      #main函数的返回参数0赋值给eax
+    11fc:       c9                      leave                                 #恢复现场
+    11fd:       c3                      ret                                   #返回(return)指令
+```
+
+也一样, 然后执行`gdb ./a.out -q -x ./gdbinit`
+
+```
+(gdb) p $esp
+$1 = (void *) 0xffffd27c
+(gdb) x/xw $esp
+0xffffd27c:     0xf7de2ed5
+(gdb) x/-10xw (0xffffd27c + 4)
+0xffffd258: 0xffffd31c   
+0xffffd25c: 0x56556231    
+0xffffd260: 0xf7fe22d0   
+0xffffd264: 0x00000000
+0xffffd268: 0x00000000    
+0xffffd26c: 0x00000000     
+0xffffd270: 0xf7fb0000    
+0xffffd274: 0xf7fb0000
+0xffffd278: 0x00000000      
+0xffffd27c: 0xf7de2ed5
+(gdb
+```
+同样, 上面GDB调试结果是我进入`main`函数的`栈帧`情况,然后执行 `si` (single instruction)执行单步调试.
+为了方便,我画栈帧地址从高到低排列(用`sort --reverse`),下面是main函数返回前栈内存的情况:
+
+| 地址 | 值 | 描述 |
+| :----: | :----: | :----: |
+| 0xffffd27c | 0xf7de2ed5 | main函数进来时esp的初始值 |
+| 0xffffd278 | 0x00000000 | 这里保存的是ebp的备份,main函数栈帧的开始 |
+| 0xffffd274 | 0x154      | main函数变量ret |
+| 0xffffd270 | 0xaa       | main函数的变量x |
+| 0xffffd26c | 0x00000000 | 未使用 |
+| 0xffffd268 | 0x00000000 | 未使用 |
+| 0xffffd264 | 0xaa       | 变量x压栈, 作foo函数参数 |
+| 0xffffd260 | 0x565561f1 | call foo指令的下一条指令地址 |
+| 0xffffd25c | 0xffffd278 | 备份main函数的栈帧的基地址,foo函数栈帧的开始 |
+| 0xffffd258 | 0x154      | foo函数变量c |
+
+> 总结:可以看到通用的代码, x64使用寄存器传参数(当函数个数小于等于6), 生成的汇编代码更加容易读懂, 并且使用寄存器传参数,效率会比基于栈传递效率高

@@ -517,3 +517,86 @@ switch_eg:
 
 ### CALL 和RET指令
 还是用一段代码和GDB调试说明吧
+```C
+// stackframe.c
+long foo(long a) {
+   long c = a + a;
+   return c;
+}
+
+int main() {
+    long x = 0xaa;
+    long ret = foo(x);
+    return 0;
+}
+```
+使用`gcc -O0 stackframe.c  && objdump -d ./a.out` 后部分的反汇编如下:
+```asm
+0000000000001129 <foo>:
+    1129:       f3 0f 1e fa             endbr64
+    112d:       55                      push   %rbp                #保存rbp的副本
+    112e:       48 89 e5                mov    %rsp,%rbp           #把rsp的值复制给rbp,用来保存当前栈帧的基地址
+    1131:       48 89 7d e8             mov    %rdi,-0x18(%rbp)    #foo函数参数rdi赋值给-0x18(%rbp),即参数a
+    1135:       48 8b 45 e8             mov    -0x18(%rbp),%rax    # 把参数a赋值给 rax
+    1139:       48 01 c0                add    %rax,%rax           # rax = rax * 2
+    113c:       48 89 45 f8             mov    %rax,-0x8(%rbp)     # 把rax赋值给-0x8(%rbp), 即变量c
+    1140:       48 8b 45 f8             mov    -0x8(%rbp),%rax     # 把变量c赋值给rax,rax保存的是foo函数的返回值
+    1144:       5d                      pop    %rbp                #恢复现场
+    1145:       c3                      retq                       # 相当于:pop栈顶数据(即上个函数的返回地址)并赋值给rip
+
+0000000000001146 <main>:
+    1146:       f3 0f 1e fa             endbr64
+    114a:       55                      push   %rbp                 #保存rbp的副本
+    114b:       48 89 e5                mov    %rsp,%rbp            #把rsp的值复制给rbp,用来保存当前栈帧的基地址
+    114e:       48 83 ec 10             sub    $0x10,%rsp           #分配0x10(十进制16)字节栈空间,栈往下生长 
+    1152:       48 c7 45 f0 aa 00 00    movq   $0xaa,-0x10(%rbp)    # 把0xaa赋值给-0x10(%rbp),即变量x
+    1159:       00
+    115a:       48 8b 45 f0             mov    -0x10(%rbp),%rax     #把变量x的值赋值给rax
+    115e:       48 89 c7                mov    %rax,%rdi            #再赋值给rdi, rdi保存的是foo函数的第一个参数
+    1161:       e8 c3 ff ff ff          callq  1129 <foo>           #call相当于1:当前的指令的下一条压栈 2:foo函数地址赋值给rip
+    1166:       48 89 45 f8             mov    %rax,-0x8(%rbp)      #rax是foo函数的返回值, 赋值给-0x8(%rbp)，即变量ret
+    116a:       b8 00 00 00 00          mov    $0x0,%eax            #main函数的返回参数0赋值给eax
+    116f:       c9                      leaveq                      #恢复现场,leaveq等价于这两条:mov %rbp, %rsp; pop %rbp
+    1170:       c3                      retq                        #返回(return)指令,
+```
+我把gdb初始化的命令放在`gdbinit`文件下, 如下:
+```
+b main
+layout asm
+layout regs
+r
+```
+然后执行`gdb ./a.out -q -x ./gdbinit`
+```
+(gdb) p $rsp
+$4 = (void *) 0x7fffffffe118
+(gdb) x/xg $rsp
+0x7fffffffe118: 0x00007ffff7de7083
+(gdb) x/-10xg (0x7fffffffe118 + 8)
+0x7fffffffe0d0: 0x00007fffffffe0f6      
+0x7fffffffe0d8: 0x00005555555551cd
+0x7fffffffe0e0: 0x00007ffff7fb42e8
+0x7fffffffe0e8: 0x0000555555555180
+0x7fffffffe0f0: 0x0000000000000000
+0x7fffffffe0f8: 0x0000555555555040
+0x7fffffffe100: 0x00007fffffffe200   
+0x7fffffffe108: 0x0000000000000000
+0x7fffffffe110: 0x0000555555555180
+0x7fffffffe118: 0x00007ffff7de7083
+(gdb)
+```
+上面GDB调试结果是我进入`main`函数的`栈帧`情况,然后执行 `si` (single instruction)执行单步调试.
+为了方便,我画栈帧地址从高到低排列(用`sort --reverse`),下面是main函数返回前栈内存的情况:
+
+| 地址 | 值 | 描述 |
+| :----: | :----: | :----: |
+| 0x7fffffffe118 | 0x00007ffff7de7083 | main函数进来时rsp的初始值|
+| 0x7fffffffe110 | 0x0000000000000000 | 这里保存的是rbp的备份,main函数栈帧的开始|
+| 0x7fffffffe108 | 0x154              | main函数变量ret|
+| 0x7fffffffe100 | 0xaa               | main函数的变量x |
+| 0x7fffffffe0f8 | 0x555555555166     | call <foo>的下一条指令的地址|
+| 0x7fffffffe0f0 | 0x7fffffffe110     | 这里保存的是rbp的备份,foo函数栈帧的开始 |
+| 0x7fffffffe0e8 | 0x154              | foo函数返回值,即foo函数c变量的值| 
+| 0x7fffffffe0e0 | 未使用              | 未使用 |
+| 0x7fffffffe0d8 | 0xaa               | foo函数的参数a |
+| 0x7fffffffe0d0 | 未使用              | 未使用 |

@@ -493,4 +493,10 @@ switch_eg:
 ---
 <br>
 
-## 过程
+# 过程
+
+### 运行时栈(csapp第三版中文版第164页)
+![stack](./static/stackframe.PNG)
+
+### CALL 和RET指令
+还是用一段代码和GDB调试说明吧

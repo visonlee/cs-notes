@@ -88,6 +88,27 @@ Sizes of C data types in x86-64. With a 64-bit machine, pointers are 8 bytes lon
 - popq %rax 等价于: movq $rax, %rax; addq $8, %rsp;
 
 ***
+<br>
+算术指令
+
+|指令 | 结果 | 描述 |
+| :----: | :----: | :----: |
+| leaq S, D | D ← &S | Load effective address |
+| inc D | D ← D+1 | Increment |
+| dec D | D ← D−1 | Decrement |
+| neg D | D ← -D | Negate |
+| not D | D ← ~D | Complement |
+| add S, D | D ← D + S | Add |
+| sub S, D  | D ← D − S | Subtract |
+| imul S, D | D ← D ∗ S | Multiply |
+| xor S, D | D ← D ^ S | Exclusive-or |
+| or S, D | D ← D or S | Or |
+| and S, D | D ← D & S | And |
+| sal k, D | D ← D << k | Left shift |
+| shl k, D | D ← D << k | Left shift (same as sal) |
+| sar k, D | D ← D >>A k | Arithmetic right shift |
+| shr k, D | D ← D >>L k | Logical right shift |
+
 ## 加载有效地址
 加载有效地址(load effective address)指令leaq实际上是movq指令的变形。这个指令看上去好像是从内存上读指定地址的数据到目标操作数中, 但实际上它并没有从内存读, 而是把该有效地址写入到目标操作数中。
 用法:
@@ -371,5 +392,105 @@ long cread(long *xp) {
 ***
 <br>
 
+## 循环
+`do-while`,`while`,`for`循环，略
 
 
+## switch
+编译器对switch的优化, 看以下代码:
+
+```C
+void switch_eg(long x, long n, long *dest)
+{
+    long val = x;
+    switch (n)
+    {
+    case 100:
+        val *= 13;
+        break;
+    case 102:
+        val += 10;
+    /* Fall through */
+    case 103:
+        val += 11;
+        break;
+    case 104:
+    case 106:
+        val *= val;
+        break;
+    default:
+        val = 0;
+    }
+    *dest = val;
+}
+```
+
+翻译到拓展的C语言:
+```C
+void switch_eg_impl(long x, long n, long *dest)
+{
+    /* Table of code pointers */
+    static void *jt[7] = {
+        &&loc_A, &&loc_def, &&loc_B,
+        &&loc_C, &&loc_D, &&loc_def,
+        &&loc_D};
+    unsigned long index = n - 100;
+    long val;
+
+    if (index > 6)
+        goto loc_def;
+    /* Multiway branch */
+    goto *jt[index];
+
+loc_A: /* Case 100 */
+    val = x * 13;
+    goto done;
+loc_B: /* Case 102 */
+    x = x + 10;
+/* Fall through */
+loc_C: /* Case 103 */
+    val = x + 11;
+    goto done;
+loc_D: /* Cases 104, 106 */
+    val = x * x;
+    goto done;
+loc_def: /* Default case */
+    val = 0;
+done:
+    *dest = val;
+}
+```
+
+其对应的汇编代码
+```asm
+# void switch_eg(long x, long n, long *dest)
+# x in %rdi, n in %rsi, dest in %rdx
+switch_eg:
+    subq $100, %rsi Compute index = n-100
+    cmpq $6, %rsi Compare index:6
+    ja .L8 If >, goto loc_def
+    jmp *.L4(,%rsi,8) Goto *jg[index]
+  .L3: loc_A:
+    leaq (%rdi,%rdi,2), %rax 3*x
+    leaq (%rdi,%rax,4), %rdi val = 13*x
+    jmp .L2 Goto done
+  .L5: loc_B:
+    addq $10, %rdi x = x + 10
+  .L6: loc_C:
+    addq $11, %rdi val = x + 11
+    jmp .L2 Goto done
+  .L7: loc_D:
+    imulq %rdi, %rdi val = x * x
+    jmp .L2 Goto done
+  .L8: loc_def:
+    movl $0, %edi val = 0
+  .L2: done:
+    movq %rdi, (%rdx) *dest = val
+    ret Return
+```
+可以看到,在这个例子中, 编译器用一个跳转表来优化switch语句
+
+---
+<br>
+
+## 过程

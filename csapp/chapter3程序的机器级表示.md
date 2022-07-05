@@ -682,3 +682,100 @@ $1 = (void *) 0xffffd27c
 | 0xffffd258 | 0x154      | foo函数变量c |
 
 > 总结:可以看到通用的代码, x64使用寄存器传参数(当函数个数小于等于6), 生成的汇编代码更加容易读懂, 并且使用寄存器传参数,效率会比基于栈传递效率高
+
+
+
+***
+<br>
+
+## 内存越界引用和缓冲区溢出
+
+看如下例子:
+```C
+#include <stdio.h>
+/* strcpy的自定义实现 */
+void mystrcpy(char *dest, const char *src)
+{
+    if(dest == NULL || src == NULL) return; 
+
+    while ((*dest++ = *src++) != '\0'); 
+}
+
+int main(int argc, char const *argv[])
+{
+    char *src = "12345";
+    char dest[4]; //缓冲区太小
+
+    mystrcpy(dest, src);
+    puts(dest);
+    
+    return 0;
+}
+```
+`gcc demo.c && ./a.out`,然后报下面的错误:
+```
+12345
+*** stack smashing detected ***: terminated
+[1]    3919 abort      ./a.out
+```
+
+下面是`main`函数反汇编结果分析:(`objdump -d ./a.out`)
+```asm
+00000000000011b1 <main>:
+    11b1:       f3 0f 1e fa             endbr64
+    11b5:       55                      push   %rbp
+    11b6:       48 89 e5                mov    %rsp,%rbp
+    11b9:       48 83 ec 30             sub    $0x30,%rsp          # 分配栈空间
+    11bd:       89 7d dc                mov    %edi,-0x24(%rbp)    
+    11c0:       48 89 75 d0             mov    %rsi,-0x30(%rbp)
+    11c4:       64 48 8b 04 25 28 00    mov    %fs:0x28,%rax       # 段寻址,金丝雀值
+    11cb:       00 00
+    11cd:       48 89 45 f8             mov    %rax,-0x8(%rbp)     # 保存金丝雀值到栈中, 用作栈保护
+    11d1:       31 c0                   xor    %eax,%eax           # 异或, 清零
+    11d3:       48 8d 05 2a 0e 00 00    lea    0xe2a(%rip),%rax    # 2004 <_IO_stdin_used+0x4> 字符串"12345"首地址给rax
+    11da:       48 89 45 e8             mov    %rax,-0x18(%rbp)    # 变量src
+    11de:       48 8b 55 e8             mov    -0x18(%rbp),%rdx    # rdx存的是src变量
+    11e2:       48 8d 45 f4             lea    -0xc(%rbp),%rax     # -0xc(%rbp) dest缓冲区
+    11e6:       48 89 d6                mov    %rdx,%rsi           # 第二个参数 src
+    11e9:       48 89 c7                mov    %rax,%rdi           # 第一个参数 dest
+    11ec:       e8 78 ff ff ff          callq  1169 <mystrcpy>     # 调用 call 函数
+    11f1:       48 8d 45 f4             lea    -0xc(%rbp),%rax     # call puts函数准备
+    11f5:       48 89 c7                mov    %rax,%rdi           # call puts函数准备
+    11f8:       e8 63 fe ff ff          callq  1060 <puts@plt>     # call puts
+    11fd:       b8 00 00 00 00          mov    $0x0,%eax
+    1202:       48 8b 4d f8             mov    -0x8(%rbp),%rcx     # 把之前存的金丝雀值放到rxc
+    1206:       64 48 33 0c 25 28 00    xor    %fs:0x28,%rcx       # 两个金丝雀值比较一下
+    120d:       00 00
+    120f:       74 05                   je     1216 <main+0x65>    # 如果相等,说明-0x8(%rbp)没有被破坏, 即缓冲区没有溢出，那么正常返回
+    1211:       e8 5a fe ff ff          callq  1070 <__stack_chk_fail@plt> # 如果来到这里,说明金丝雀-0x8(%rbp)被破坏,异常退出
+    1216:       c9                      leaveq
+    1217:       c3                      retq
+    1218:       0f 1f 84 00 00 00 00    nopl   0x0(%rax,%rax,1)
+    121f:       00
+```
+
+上面可以看到，通过分析mian函数栈帧,如下图:
+
+| 地址 | 值 | 描述 |
+| :----: | :----: | :----: |
+| ... | ...       |  |
+| -0x8(%rbp) | 金丝雀值 | 来自%fs:0x28,用于栈保护 |
+|  -0xc(%rbp)| [3][2][1][0] | dest缓冲区 |
+| ... | ...      |  |
+
+可以看到, 因为`dest`缓冲区的大小只有4个字节, 而`src`字符串`12345`放不下, 最终会导致`-0x8(%rbp)`上的金丝雀地址被覆盖了。最终`xor %fs:0x28,%rcx`比较结果不一样而调用`__stack_chk_fail`函数。
+同时这里也告诉我们`strcpy`函数不安全, 用得不好会导致程序问题, 可以用`strncpy`代替
+
+我们可以用编译选项`-fno-stack-protector`,来看下没有栈保护的情况,`gcc -fno-stack-protector demo.c`,然后再看汇编(反汇编略)看`main`也没有栈保护和调用`__stack_chk_fail`的相关代码，在这里,程序也确实可以正常打印。但是在实际工作中不要这样做,因为这是一个UB(undefined behavior),我们加上栈保护功能,能是我们的代码更加安全,同时这里看到也只有非常小的性能损失, 所以加上栈保护行为是非常有必要的。
+
+除了栈保护检测来对抗缓冲区溢出攻击, 其他防护手段还有:
+- 栈随机化
+如:
+```C
+void foo() {
+    long local;
+    printf("%p\n", &local); //程序每次运行,打印的结果都不一样,可以有效保护程序
+}
+```
+- 限制可执行代码区域
+略(请参考csapp第三步中文版201页)

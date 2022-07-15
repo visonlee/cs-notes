@@ -4,3 +4,4 @@
 - [CSAPP CMU](https://csapp.cs.cmu.edu/)
 - [B站](https://www.bilibili.com/video/BV1iW411d7hd)
 - [如何阅读《深入理解计算机系统》这本书？](https://www.zhihu.com/question/20402534)
+- [CSAPP重点解读](https://fengmuzi2003.gitbook.io/csapp3e/)

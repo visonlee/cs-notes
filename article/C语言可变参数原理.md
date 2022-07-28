@@ -4,7 +4,6 @@
 > 我测试的环境文 WSL(windows subsystem linux), Ubuntu 20.04.4
 
 ---
-<br>
 
 ## 示例
 
@@ -145,24 +144,60 @@ $16 = (void **) 0x7fffffffe088         # 相当于(-0x38(%rsp))
 
 然后根据`sum`函数的反汇编和`gdb`调试的输出,我们可以画出下面函数调用的`栈帧`
 
-| 注释 | 地址 | 值 |  | | |
-| :----: | :----: | :----: | :----: |  :----: | :----: |
-| 第9个参数    |  rsp + 0x18           | 8 |  | | |
-| 第8个参数   | rsp + 0x10             | 7 |  | | |
-| 第7个参数(ap.overflow_arg_area初始指向)   | rsp + 0x08      | 6 | ← | ← |← |
-| 进入sum时rsp指向返回main的地址  | rsp   | main函数返回执行的地址 |  | | ↑ |
-| 第6个参数  | rsp - 0x08       | 5 |  | | ↑ |
-| 第5个参数   | rsp - 0x10 | 4 |  | | ↑|
-| 第4个参数  | rsp - 0x18 | 3 |  | | ↑ |
-| 第3个参数  | rsp - 0x20 | 2 |  | | ↑ |
-| 第2个参数 | rsp - 0x28 | 1 |  | | ↑ |
-| ap.reg_save_area的初始指向 | rsp - 0x30 | 值未使用 | ← | ← | ↑ |
-| 变量ap.reg_save_area| rsp - 0x38 | ap.reg_save_area | → | ↑ | ↑ |
-| 变量ap.overflow_arg_area | rsp - 0x40 | ap.overflow_arg_area |  →  |  → | ↑ |
-| 变量ap.fp_offset  | rsp - 0x44 | ap.fp_offset |  |  | |
-| 变量ap.gp_offset |  rsp - 0x48 | ap.gp_offset |  |  | |
+![variable_args](../static/variable_args.png)
 
-# TODO
+下面对结构体`ap`作出的说明
+
+| 成员名称 | 描述 |
+| :----: | :----: | 
+| reg_save_area | 是个指针,指向使用寄存器传递(参数小于等于6个时)参数的区域 |
+| overflow_arg_area | 是个指针,指向栈传递(参数大于6个时)的参数区 |
+| gp_offset	| 参数个数小于等于6个时, 下一个整型数据相较于reg_save_area的偏移，即指下个va_arg(ap, xxx)的值在 ap.reg_save_area + ap.gp_offset  |
+| fp_offset	| 参数个数小于等于6个时,下一个浮点型型数据相较于reg_save_area 的偏移，这里不讨论浮点传参的例子, 故略 |
+
+用C语言伪代码来表示可变参数的原来, 如下:
+```C
+long sum(long num, ...)
+{
+  va_list ap;
+  long sum = 0;
+
+ /**
+  * va_start执行过成相当于:
+  *  1. 把第2到6个参数(即前5个可变参数), 1L, 2L, 3L, 4L, 5L搬到sum函数栈帧, 其中可变参数6L, 7L, 8L在main函数的栈帧中
+  *  2. ap.reg_save_area 指向第一个可变参数(1L)的下一个位置,同时 ap.gp_offset设置为8, 即sizeof(long)
+ */
+  va_start(ap, num);
+
+for (int i = 1; i <= num; i++)
+{
+    if (i < 6 )
+    {
+      // va_arg(ap, long) 在使用寄存器传参时的取参数情况
+      sum + = *((long *)(ap.reg_save_area + ap.gp_offset));
+      ap.gp_offset += sizeof(long)
+    }else {
+      // va_arg(ap, long) 在使用栈传参时的取参数情况
+     sum += *((long *)(ap.overflow_arg_area));
+     ap.overflow_arg_area += sizeof(long)
+    }
+}
+  va_end(ap);
+  return sum;
+}
+
+int main()
+{
+  long ret;
+  ret = sum(8L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L);
+  printf("sum(1..8) = %ld\n", ret);
+
+  return 0;
+}
+```
+
+---
+<br>
 
 ## `IA-32` 下的实现方式
 

@@ -29,13 +29,21 @@
 然后可以点击三角符号来控制仿真的速度.
 
 ![arp_icmp](./static/arp_icmp.png) 
+
 ![ping1](./static/ping1.png)
+
 ![ping2](./static/ping2.png)
+
 ![ping3](./static/ping3.png)
+
 ![ping4](./static/ping4.png)
+
 ![ping5](./static/ping5.png)
+
 ![ping6](./static/ping6.png)
+
 ![ping7](./static/ping7.png)
+
 ![ping8](./static/ping8.png)
 
 从上面的图,可以看到两台主机通信的详细过程(相同颜色的可以认为是相同的一次请求),可以看到`ping`命令是基于`ICMP`协议的,由于第一次`ICMP`通信时, `PC0`不知道目标机器的物理MAC地址, 所以马上发出`ARP`请求(注意:发出的目标物理地址是`FFFF.FFFF.FFFF`,说明这是一个广播请求, 同一子网的所有机器都可以这个`ARP`包),以此来获取目标主机的物理地址了, `PCO`获取到物理地址后继续之前的ICMP请求。继续后续的`ICMP`请求,我们就看不到`ARP`请求了, 因为`PC0`主机已经把`PC1`的物理地址缓存起来了(可以用`arp -a`查看缓存)。

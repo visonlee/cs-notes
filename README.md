@@ -1,2 +1,2 @@
 # cs-notes
-my study notes
+记录我自学计算机专业课程的学习笔记

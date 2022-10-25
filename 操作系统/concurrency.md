@@ -241,7 +241,7 @@ void Tsum() {
 }
 ```
 
-编译,然后我们看到 `sum++`编译后的汇编指令由原来的3条, 变成`addl   $0x1,0x2cd4(%rip)  # 4028 <sum>`
+编译,然后我们看到 `sum++`编译后的汇编指令由原来的3条, 变成`addl $0x1,0x2cd4(%rip)  # 4028 <sum>`
 
 然后再执行,结果如下:
 ```
@@ -253,7 +253,7 @@ sum = 100082161
 
 我们的CPU是多核的,那怎么验证它在单核下运行就对呢,我们可以使用`taskset`命令来设置进程到`CPU`的亲和性。演示如下:
 ```
-➜  concurrency while true; do taskset --cpu-list 0 ./a.out; done
+> while true; do taskset --cpu-list 0 ./a.out; done
 sum = 200000000
 sum = 200000000
 sum = 200000000
@@ -264,11 +264,17 @@ sum = 200000000
 
 回到上一个问题,`addl $0x1,0x2cd4(%rip)  # 4028 <sum>` 为什么在多核CPU就会有问题呢? 
 
-> TODO 后面再回答,涉及多核CPU的硬件模型
+因为现代`x86-64`处理器在处理这条`CISC`风格的机器指令时，可能会将上面一条指令将其拆分为对应的三种不同`微指令（uOp`：`LOAD`、`ADD`、`STORE`,因为这样中可以做到`指令级并行(Instruction-Level Parallelism)`。其中，`LOAD`指令会首先从给定内存地址处读出当前的数据值；`ADD`指令则会根据用户传入的立即数参数，来计算出更新后的数据值；最后`STORE`指令会将这个结果数据值更新到对应的内存中。同之前多条机器指令的实现类似(比如`x++`)，这些微指令在操作系统的线程调度下，也可能存在着交替执行的过程，因此也有着产生数据竞争的风险。
+
+参考书籍: [计算机体系结构:量化方法研究](https://book.douban.com/subject/20452387/)
 
 ## `lock`前缀
-什么是`lock prefix`, 参看,[LOCK Prefix (lock)](https://docs.oracle.com/cd/E19455-01/806-3773/instructionset-128/index.html)
-或者[《Intel® 64 and IA-32 Architectures Developer's Manual: Vol. 3A》的8.1章](https://www.intel.com/content/www/us/en/architecture-and-technology/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.html)
+什么是`lock prefix`
+> the processor’s LOCK# signal to be asserted during execution of the accompanying instruction (turns the 
+instruction into an atomic instruction). In a multiprocessor environment, the LOCK# signal ensures that the 
+processor has exclusive use of any shared memory while the signal is asserted.
+
+摘自《Intel® 64 and IA-32 Architectures Software Developer’s Manual Volume 2》
 
 于是我们在前面程序的`asm volatile("add $1, %0": "+m"(sum));` 加上`lock prefix`后变成`asm volatile("lock add $1, %0": "+m"(sum));`
 然后重新编译执行,结果如下:
@@ -530,11 +536,493 @@ void T1() {
 
 - MFENCE (Pentium 4 and more recent processor families only)
 
- Serializes all store and load operations that occurred prior to the MFENCE instruction in the 
-program instruction stream.
-摘自《Intel® 64 and IA-32 Architectures Developer's Manual: Vol. 3A》
+Performs a serializing operation on all load-from-memory and store-to-memory instructions that were issued prior 
+the MFENCE instruction. This serializing operation guarantees that every load and store instruction that precedes 
+the MFENCE instruction in program order becomes globally visible before any load or store instruction that follows 
+the MFENCE instruction. The MFENCE instruction is ordered with respect to all load and store instructions
+
+摘自《Intel® 64 and IA-32 Architectures Software Developer’s Manual Volume 2》
 
 然后再执行程序, 就再也看不到`x`和`y`为`0`的结果了。
 
-## 宽松内存模型
-TODO
+## 硬件内存模型
+
+[Hardware Memory Models by Russ Cox](https://research.swtch.com/hwmm)
+
+
+---
+
+# 理解并发程序执行
+
+互斥：保证两个线程不能同时执行一段代码。
+
+回到上面`sum.c`的例子,我们使得两个县城不能同时执行`sum++`,于是插入`神秘代码`，使得`sum.c`(或者任意其他代码) 能够正常工作
+
+```C
+void Tsum() {
+  // 神秘代码
+  sum++;
+  // 神秘代码
+}
+```
+
+失败的尝试:
+```C
+int locked = UNLOCK;
+
+void critical_section() {
+retry:
+  if (locked != UNLOCK) { // #1
+    goto retry;
+  }
+  locked = LOCK;    // #2
+
+  // critical section
+
+  locked = UNLOCK;
+}
+```
+因为处理器不能保证这里的`#1(load)` 和 `#2(store)`的原子性, 所以这里是错误的.
+
+## Peterson算法
+
+[Peterson算法](https://en.wikipedia.org/wiki/Peterson%27s_algorithm)
+
+以厕所包厢为例子:
+A 和 B 争用厕所的包厢
+
+- 想进入包厢之前，A/B 都要先举起自己的旗子
+  - A 确认旗子举好以后，往厕所门上贴上`B 正在使用`的标签
+  - B 确认旗子举好以后，往厕所门上贴上`A 正在使用`的标签
+- 然后，如果对方的旗子举起来，且门上的名字不是自己，等待
+  - 否则可以进入包厢
+- 出包厢后，放下自己的旗子
+
+代码如下:
+```C
+#include "thread.h" // peterson-simple.c
+
+#define A 1
+#define B 2
+
+atomic_int nested;
+atomic_long count;
+
+void critical_section() {
+  long cnt = atomic_fetch_add(&count, 1);
+  assert(atomic_fetch_add(&nested, 1) == 0);
+  atomic_fetch_add(&nested, -1);
+}
+
+int volatile x = 0, y = 0, turn = A;
+
+void TA() {
+    while (1) {
+/* PC=1 */  x = 1; //举旗子
+/* PC=2 */  turn = B; //贴标签
+/* PC=3 */  while (y && turn == B); //如果对方的旗子举起来,且门上的名字不是自己,等待
+            critical_section();
+/* PC=4 */  x = 0;
+    }
+}
+
+void TB() {
+  while (1) {
+/* PC=1 */  y = 1;
+/* PC=2 */  turn = A;
+/* PC=3 */  while (x && turn == A) ;
+            critical_section();
+/* PC=4 */  y = 0;
+  }
+}
+
+int main() {
+  create(TA);
+  create(TB);
+}
+```
+
+下面来画一下程序的状态机图`(PC1,PC2,x,y,turn);`
+
+![Peterson算法状态机分析](./static/peterson_state_machine.png)
+
+如上图所示, 正是因为状态机有了环,`Peterson算法`可以实现两个线程(在Sequential 内存模下)实现互斥。
+
+我们编译并运行程序, 结果如下:
+```
+> gcc peterson-simple.c -lpthread && ./a.out
+a.out: peterson-simple.c:11: critical_section: Assertion `atomic_fetch_add(&nested, 1) == 0' failed.
+[1]    1480 abort      ./a.out
+```
+可以看到,结果还是翻车了, 这是因为上面的`peterson-simple.c`的`Peterson算法`只能实现`Sequential 内存模`下的内存模型的两个线程的互斥。
+
+而我的电脑是硬件内存模型是`x86 Total Store Order (x86-TSO)`,所以需要`内存屏障`来保障`Peterson算法`的正确性,于是有了一下代码:
+```C
+#include "thread.h" // peterson-barrier.c
+
+#define A 1
+#define B 2
+
+#define BARRIER __sync_synchronize()
+
+atomic_int nested;
+atomic_long count;
+
+void critical_section() {
+  long cnt = atomic_fetch_add(&count, 1);
+  int i = atomic_fetch_add(&nested, 1) + 1;
+  if (i != 1) {
+    printf("%d threads in the critical section @ count=%ld\n", i, cnt);
+    assert(0);
+  }
+  atomic_fetch_add(&nested, -1);
+}
+
+int volatile x = 0, y = 0, turn;
+
+void TA() {
+  while (1) {
+    x = 1;                   BARRIER;
+    turn = B;                BARRIER; // <- this is critcal for x86
+    while (1) {
+      if (!y) break;         BARRIER;
+      if (turn != B) break;  BARRIER;
+    }
+    critical_section();
+    x = 0;                   BARRIER;
+  }
+}
+
+void TB() {
+  while (1) {
+    y = 1;                   BARRIER;
+    turn = A;                BARRIER; // <- this is critcal for x86
+    while (1) {
+      if (!x) break;         BARRIER;
+      if (turn != A) break;  BARRIER;
+    }
+    critical_section();
+    y = 0;                   BARRIER;
+  }
+}
+
+int main() {
+  create(TA);
+  create(TB);
+}
+```
+现在再执行`gcc peterson-barrier.c -lpthread && ./a.out`,代码可以正常运行了
+
+> 思考: 哪些`barrier`是多余的? 除了`<- this is critcal for x86`那一行标注的,其他的可以去掉。
+
+### Model Checker
+用python写Model Checker代码, 来自动画多线程程序的状态机模型,具体略。
+
+
+# 共享内存上的互斥
+
+我们可以看到,根据之前的经验, 其实实现互斥根本是很难的, 因为`不能同时读/写共享内存`。
+
+即使是上面的`Peterson算法`用软件方式可以正确实现线程互斥, 但是其编程模型非常复杂,也难理解,性能也不高,而且还只能实现两个线程之间的互斥,使用起来也不友好。
+
+那么有没有什么办法可以解决上面的问题呢? 即执行`load + store`的时候可以以原子方式指令?
+
+于是软件做不了,那就硬件来做, 于是`原子指令`来了.
+
+`X86`硬件能为我们提供一条`瞬间完成`的`读 + 写`指令
+
+- 请所有人闭上眼睛，看一眼 (`load`)，然后贴上标签 (`store`)
+  - 如果多人同时请求，硬件选出一个`胜者`
+- `败者`要等`胜者`完成后才能继续执行
+
+## x86 原子操作
+
+- LOCK指令前缀(`lock prefix`)
+```C
+  asm volatile("lock add $1, %0": "+m"(sum));
+```
+这个`lock`前缀之前已经介绍过了
+
+- `xchg` 指令
+```C
+int xchg(volatile int *addr, int newval) {
+  int result;
+  asm volatile ("lock xchg %0, %1"
+    : "+m"(*addr), "=a"(result) : "1"(newval)); //xchg已是带lock效果的原子指令,这里lock前缀可以不加
+  return result;
+}
+```
+> The XCHG instruction always asserts the LOCK# signal regardless of the presence or absence of 
+the LOCK prefix. 
+
+> 摘自《Intel® 64 and IA-32 Architectures Software Developer’s Manual Volume 2》
+
+- 更多的原子操作
+[stdatomic.h](https://en.cppreference.com/w/cpp/header/stdatomic.h)
+
+原子指令的模型
+- 保证之前的 store 都写入内存
+- 保证 load/store 不与原子指令乱序
+
+`Lock`指令的现代实现
+
+在 L1 cache 层保持一致性 (ring/mesh bus)
+
+- 相当于每个 cache line 有分别的锁
+- store(x) 进入 L1 缓存即保证对其他处理器可见
+  - 但要小心 store buffer 和乱序执行
+
+L1 cache line 根据状态进行协调(`MESI协议`)
+- M (Modified), 脏值
+- E (Exclusive), 独占访问
+- S (Shared), 只读共享
+- I (Invalid), 不拥有 cache line
+
+[lock 指令实现第40~48分钟](https://www.bilibili.com/video/BV1ja411h7jt)
+
+## 自旋锁
+
+我们可以 使用`xchg`指令来实现自旋锁,代码如下:
+```C
+// Spinlock
+typedef int spinlock_t;
+#define SPIN_INIT() 0
+
+static inline int atomic_xchg(volatile int *addr, int newval) {
+  int result;
+  asm volatile ("lock xchg %0, %1":
+    "+m"(*addr), "=a"(result) : "1"(newval) : "memory");
+  return result;
+}
+
+void spin_lock(spinlock_t *lk) {
+  while (1) {
+    intptr_t value = atomic_xchg(lk, 1);
+    if (value == 0) {
+      break;
+    }
+  }
+}
+void spin_unlock(spinlock_t *lk) {
+  atomic_xchg(lk, 0); // 其实这里可以不用atomic_xchg, 直接 *lk = 0
+}
+```
+
+## RISC-V: 另一种原子操作的设计
+
+考虑常见的原子操作：
+
+- atomic test-and-set(`CMPXCHG`)
+  - reg = load(x); if (reg == XX) { store(x, YY); }
+- lock xchg(`XCHG`)
+  - reg = load(x); store(x, XX);
+- lock add(`LOCK prefix`)
+  - t = load(x); t++; store(x, t);
+
+它们的本质都是:
+1. load
+2. exec (处理器本地寄存器的运算)
+3. store
+
+### Load-Reserved/Store-Conditional (LR/SC)
+
+`LR`:在内存上标记`reserved` (盯上你了)，中断、其他处理器写入都会导致标记消除
+```
+lr.w rd, (rs1)
+rd = M[rs1]
+reserve M[rs1]
+```
+
+`SC`: 如果`盯上`未被解除，则写入
+```
+sc.w rd, rs2, (rs1)
+  if still reserved:
+    M[rs1] = rs2
+    rd = 0
+  else:
+    rd = nonzero
+```
+
+### Compare-and-Swap 的 LR/SC 实现
+```C
+int cas(int *addr, int cmp_val, int new_val) {
+  int old_val = *addr;
+  if (old_val == cmp_val) {
+    *addr = new_val; return 0;
+  } else { return 1; }
+}
+```
+
+```
+cas:
+  lr.w  t0, (a0)       # Load original value.
+  bne   t0, a1, fail   # Doesn’t match, so fail.
+  sc.w  t0, a2, (a0)   # Try to update.
+  bnez  t0, cas        # Retry if store-conditional failed.
+  li a0, 0             # Set return to success.
+  jr ra                # Return.
+fail:
+  li a0, 1             # Set return to failure.
+  jr ra                # Return
+```
+
+## 互斥锁 (Mutex Lock)
+
+讲互斥锁之前先说一下自旋锁的缺陷:
+
+- 性能问题 (0)
+  - 自旋 (共享变量) 会触发处理器间的缓存同步，延迟增加
+
+- 性能问题 (1)
+  - 除了进入临界区的线程，其他处理器上的线程都在空转
+  - 争抢锁的处理器越多，利用率越低
+
+- 性能问题 (2)
+  - 操作系统不`感知`线程在做什么,获得自旋锁的线程可能被操作系统切换出去
+  - 实现 100% 的资源浪费
+
+下面用一段代码来测试一下自旋锁的性能问题:
+```C
+#include "thread.h" // sum-scalability.c
+#include "thread-sync.h"
+
+#define N 10000000
+spinlock_t lock = SPIN_INIT();
+// mutex_t lock;
+
+long n, sum = 0;
+
+void Tsum() {
+  for (int i = 0; i < n; i++) {
+    spin_lock(&lock);
+    sum++;
+    spin_unlock(&lock);
+  }
+}
+
+int main(int argc, char *argv[]) {
+  assert(argc == 2);
+  int nthread = atoi(argv[1]);
+  n = N / nthread;
+  for (int i = 0; i < nthread; i++) {
+    create(Tsum);
+  }
+  join();
+  assert(sum == n * nthread);
+}
+
+```
+其中`thread-sync.h`代码如下,里面会包含`自旋锁`和接下来要讲的`互斥锁`,以及后面的要讲的`条件变量`和`信号量`
+```C
+#include <semaphore.h>
+
+// Spinlock
+typedef int spinlock_t;
+#define SPIN_INIT() 0
+
+static inline int atomic_xchg(volatile int *addr, int newval) {
+  int result;
+  asm volatile ("lock xchg %0, %1":
+    "+m"(*addr), "=a"(result) : "1"(newval) : "memory");
+  return result;
+}
+
+void spin_lock(spinlock_t *lk) {
+  while (1) {
+    intptr_t value = atomic_xchg(lk, 1);
+    if (value == 0) {
+      break;
+    }
+  }
+}
+void spin_unlock(spinlock_t *lk) {
+  atomic_xchg(lk, 0);
+}
+
+// Mutex
+typedef pthread_mutex_t mutex_t;
+#define MUTEX_INIT() PTHREAD_MUTEX_INITIALIZER
+void mutex_lock(mutex_t *lk)   { pthread_mutex_lock(lk); }
+void mutex_unlock(mutex_t *lk) { pthread_mutex_unlock(lk); }
+
+// Conditional Variable
+typedef pthread_cond_t cond_t;
+#define COND_INIT() PTHREAD_COND_INITIALIZER
+#define cond_wait pthread_cond_wait
+#define cond_broadcast pthread_cond_broadcast
+#define cond_signal pthread_cond_signal
+
+// Semaphore
+#define P sem_wait
+#define V sem_post
+#define SEM_INIT(sem, val) sem_init(sem, 0, val)
+```
+
+使用互斥锁然后用不同的线程数去测试,结果如下:
+```
+> gcc sum-scalability.c -lpthread
+> time ./a.out 1
+./a.out 1  0.13s user 0.00s system 94% cpu 0.141 total
+> time ./a.out 2
+./a.out 2  1.42s user 0.00s system 198% cpu 0.715 total
+> time ./a.out 4
+./a.out 4  6.18s user 0.00s system 395% cpu 1.564 total
+> time ./a.out 32
+./a.out 32  102.31s user 0.00s system 797% cpu 12.827 total
+```
+可以看到,随着线程的增多,性能急剧下降。
+
+### 自旋锁的使用场景:
+
+- 临界区几乎不`拥堵`,即并发很小,很容易争抢到锁,并且线程抢到锁之后很快就释放资源
+- 持有自旋锁时(通过开关中断)禁止执行流切换,操作系统内核的并发数据结构 (短临界区)
+
+
+### 实现线程 + 长临界区的互斥
+互斥锁通过操作系统内核态实现
+- syscall(SYSCALL_lock, &lock);
+  - 试图获得lock，但如果失败，就切换到其他线程
+- syscall(SYSCALL_unlock, &lock);
+  - 释放lock，如果有等待锁的线程就唤醒
+
+一个互斥锁的现实生活中的比喻, 操作系统比喻成游泳馆更衣室管理员
+
+- 先到的人 (线程)
+  - 成功获得手环，进入游泳馆
+  - *lock = 🔒，系统调用直接返回
+- 后到的人 (线程)
+  - 不能进入游泳馆，排队等待
+  - 线程放入等待队列，执行线程切换 (yield)
+- 洗完澡出来的人 (线程)
+- 交还手环给管理员；管理员把手环再交给排队的人
+- 如果等待队列不空，从等待队列中取出一个线程允许执行
+- 如果等待队列为空，*lock = ✅
+
+> 管理员(OS)使用自旋锁确保自己处理手环的过程是原子的
+
+
+## 关于自选和互斥的一些分析
+自旋锁 (线程直接共享 locked)
+
+- 更快的 fast path
+  - `xchg` 成功 → 立即进入临界区，开销很小
+- 更慢的 slow path
+  - `xchg` 失败 → 浪费 CPU 自旋等待
+
+互斥(睡眠)锁 (通过系统调用访问 locked)
+- 更快的 slow path
+  - 上锁失败线程不再占用CPU
+- 更慢的 fast path
+  - 即便上锁成功也需要进出内核 (syscall)
+
+
+## Futex: Fast Userspace muTexes
+> 小孩子才做选择。我当然是全都要啦！
+涉及操作系统的人,也想到了这一点,他们综合了这两种锁的优点, 于是`Futex(Fast Userspace muTexes)`来了。
+
+- `Fast path`: 一条原子指令，上锁成功立即返回,即在用户态获得锁,马上返回
+- `Slow path`: 用户态上锁失败，然后执行系统调用睡眠
+
+> Java里面的AQS(`AbstractQueuedSynchronizer`)和`Synchronized`关键字其实也是基于这种思想
+
+把`sum-scalability.c`的锁换成`mutex`,再用`strace ./a.out 32`,发现互斥锁(`mutex`)背后执行的是`futex`系统调用.

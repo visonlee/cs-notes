@@ -549,6 +549,7 @@ the MFENCE instruction. The MFENCE instruction is ordered with respect to all lo
 
 [Hardware Memory Models by Russ Cox](https://research.swtch.com/hwmm)
 
+`Russ Cox`还是MIT 教授,讲OS的课程 [CS 6.828](https://pdos.csail.mit.edu/6.828/2021/xv6/book-riscv-rev2.pdf)
 
 ---
 

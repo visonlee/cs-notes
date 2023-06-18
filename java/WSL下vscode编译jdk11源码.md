@@ -25,7 +25,7 @@ sh ./configure \
 make all
 ```
 
-## VSCODE 使用自己编译的jdk跑java代码
+## VSCODE 使用自己编译的jdk跑java代码`setting.json`
 ```json
 {
     "java.project.sourcePaths": ["src"], // java源目录
@@ -44,7 +44,7 @@ make all
 }
 ```
 
-## VSCODE 配置调试hotspot 源码
+## VSCODE 配置调试hotspot C/C++源码`launch.json`
 ```json
 {
     "version": "0.2.0",

@@ -70,6 +70,22 @@ make all
                     "ignoreFailures": true
                 }
             ]
+        },
+        // remote debug
+        {
+            "type": "cppdbg",
+            "name": "(gdb) Attach",
+            "request": "attach",
+            "program": "/home/lws/jvm/openjdk11/build/linux-x86_64-normal-server-slowdebug/jdk/bin/java",
+            "processId": "${process id to attach to}", // jps 查看出来的进程id
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         }
     ]
 }

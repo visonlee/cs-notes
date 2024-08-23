@@ -549,7 +549,7 @@ int main() {
     113c:       48 89 45 f8             mov    %rax,-0x8(%rbp)     # 把rax赋值给-0x8(%rbp), 即变量c
     1140:       48 8b 45 f8             mov    -0x8(%rbp),%rax     # 把变量c赋值给rax,rax保存的是foo函数的返回值
     1144:       5d                      pop    %rbp                #恢复现场
-    1145:       c3                      retq                       # 相当于:pop栈顶数据(即上个函数的返回地址)并赋值给rip
+    1145:       c3                      retq                       # 相当于:pop $rip (pop出来的内容为调用者函数callq指令下一句指令的地址，并赋值给$rip)
 
 0000000000001146 <main>:
     1146:       f3 0f 1e fa             endbr64
